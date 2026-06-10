@@ -1,0 +1,5 @@
+2026-06-10 20:41:03 INFO service=order-api message="server started" port=8080
+2026-06-10 20:42:11 INFO service=order-api message="database connected"
+2026-06-10 20:45:29 WARN service=order-api message="request latency high" path="/api/orders" latency_ms=2380
+2026-06-10 20:45:31 ERROR service=order-api message="database query timeout" sql="select * from orders where status='pending'" timeout_ms=3000
+2026-06-10 20:45:35 ERROR service=order-api message="failed to create order" reason="database query timeout"

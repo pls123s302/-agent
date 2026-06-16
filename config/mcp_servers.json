@@ -1,0 +1,10 @@
+{
+  "docker_readonly": {
+    "command": "{python_executable}",
+    "args": [
+      "-m",
+      "ops_agent.mcp_servers.docker_readonly"
+    ],
+    "transport": "stdio"
+  }
+}

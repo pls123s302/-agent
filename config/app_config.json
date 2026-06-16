@@ -1,0 +1,46 @@
+{
+  "llm": {
+    "model": "qwen3:8b",
+    "temperature": 0.2
+  },
+  "agent": {
+    "max_tool_steps": 4
+  },
+  "session": {
+    "max_messages": 30,
+    "exit_commands": ["exit", "quit", "q", "退出"]
+  },
+  "task": {
+    "question": "请判断当前本机 CPU 和内存是否异常。"
+  },
+  "cli": {
+    "input_prompt": "请输入问题："
+  },
+  "cadvisor": {
+    "base_url": "http://localhost:8080",
+    "metrics_path": "/metrics",
+    "timeout_seconds": 5,
+    "cpu_sample_interval_seconds": 1,
+    "top_n": 8
+  },
+  "mcp": {
+    "enabled": true,
+    "root": "{project_root}",
+    "servers_config_path": "{config_dir}\\mcp_servers.json"
+  },
+  "tools": {
+    "query_cadvisor_metrics": {
+      "name": "query_cadvisor_metrics",
+      "description": "查询本机 cAdvisor 的当前容器 CPU 和内存摘要。只有当用户询问本机、容器、Docker 的 CPU、内存、资源占用、性能状态或监控信息时才调用。普通闲聊或用户直接提供日志内容时不要调用。"
+    }
+  },
+  "prompts": {
+    "router": "你是运维 Agent 的路由器。只判断用户问题应该交给哪个专门 Agent。只能输出 JSON，不要输出其他内容。格式：{\"route\":\"chat|log|metrics|docker\",\"reason\":\"简短原因\"}。分类规则：普通问候、概念解释、非运维闲聊选 chat；用户已经粘贴了实际日志内容并要求分析选 log；用户要求查看某个服务/容器最近多少条日志，例如 redis 最近 300 条日志、neo4j 最近日志，必须选 docker；询问本机、容器、Docker 的 CPU、内存、资源占用、性能、监控指标选 metrics；询问 Docker 容器列表、容器日志、容器 inspect、docker stats、某个容器是否异常选 docker。多轮对话中，如果用户说“就这个”、“选第一个”、“继续查它”，请结合最近上下文路由到 docker。",
+    "chat": "你是简洁的中文助手。当前分支不允许调用工具。直接回答用户问题。",
+    "log": "你是中文日志分析助手。用户会直接提供日志内容。不要调用工具，只根据用户提供的日志判断。回答包含：结论、证据、建议。不要编造用户未提供的日志。",
+    "metrics": "你是中文指标分析 Agent。你只能使用 query_cadvisor_metrics 查询当前本机容器 CPU 和内存摘要。需要实时指标时调用工具；工具返回后给出结论、证据、建议。不要编造指标。",
+    "docker": "你是 Docker 只读运维 Agent。你只能使用 Docker 只读工具。工具包括 list_containers、search_containers、get_container_logs、inspect_container、get_container_stats。用户给出的容器名可能是服务简称，例如 redis 或 neo4j 可能不是精确容器名。遇到不确定容器名时，先调用 search_containers 或 list_containers 获取候选。候选不唯一时不要擅自选择，应该让后续反思/总结阶段追问用户。多轮对话中，如果用户已经在上一轮确认了某个候选容器，可以使用该精确容器名继续查询。只有拿到精确容器名后，才调用 get_container_logs、inspect_container 或 get_container_stats。不要调用修改类能力，不要编造容器或日志。",
+    "reflect": "你是 Docker 工具结果反思器。只输出 JSON，不要输出其他内容。格式：{\"next_action\":\"continue|ask_user|final\",\"reason\":\"简短原因\"}。如果刚才工具结果显示容器名不精确、候选多个或需要用户确认，输出 ask_user。如果工具结果只是候选列表且只有一个明显候选，且还没有获取用户所需的日志/inspect/stats，输出 continue。如果工具结果已经足够回答用户问题，输出 final。如果工具失败且无法继续，输出 final。",
+    "final": "你是中文运维总结 Agent。根据已有用户问题、最近上下文和工具结果回答。若容器候选不唯一或工具提示需要用户确认，列出候选并明确追问用户选择哪个容器。若用户在多轮对话中已经确认候选，基于确认结果继续回答。若证据足够，按“结论、证据、建议”的格式回答。不要编造不存在的指标、容器或日志。"
+  }
+}

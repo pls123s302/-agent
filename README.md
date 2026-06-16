@@ -1,74 +1,109 @@
-# LangGraph + Qwen3 + Filesystem MCP Demo
+# LangGraph 运维 Agent Demo
 
-这个 demo 使用 LangGraph 编排两个步骤：
+当前版本是一个多 Agent 运维助手骨架：
 
 ```text
-Filesystem MCP 读取日志文件
+用户问题
     ↓
-qwen3:8b 分析日志内容
+router_agent 判断任务类型
+    ├─ chat_agent    普通问答
+    ├─ log_agent     分析用户直接提供的日志
+    ├─ metrics_agent 查询 cAdvisor CPU / 内存指标
+    └─ docker_agent  查询 Docker 容器信息
+            ↓
+        docker_tools
+            ↓
+        reflect_agent 判断继续查、追问用户或总结
+            ↓
+        final_agent
 ```
 
-## 准备
+## 目录结构
 
-确认本机已经安装并启动 Ollama：
-
-```powershell
-ollama pull qwen3:8b
-ollama serve
+```text
+config/
+  app_config.json       模型、Agent 配置、提示词、cAdvisor、工具描述
+  mcp_servers.json      Docker 只读 MCP server 配置
+ops_agent/
+  cadvisor.py           cAdvisor 指标采集和摘要生成
+  cli.py                命令行入口
+  config.py             配置加载和占位符替换
+  graph.py              多 Agent LangGraph 流程
+  llm.py                LLM 创建
+  mcp_servers/
+    docker_readonly.py  Docker 只读 MCP server
+  nodes.py              router/chat/log/metrics/docker/reflect/final 节点
+  state.py              LangGraph state
+  tools.py              工具分组和 MCP tools 加载
+langgraph_qwen_demo.py  兼容入口
 ```
 
-安装 Python 依赖：
+## 工具
 
-```powershell
-pip install -r requirements.txt
+本地工具：
+
+```text
+query_cadvisor_metrics
 ```
 
-Filesystem MCP 通过 `npx` 启动，所以还需要本机安装 Node.js。
+Docker 只读 MCP 工具：
+
+```text
+list_containers
+search_containers
+get_container_logs
+inspect_container
+get_container_stats
+```
+
+Docker 工具只做查询，不提供 stop、restart、rm、exec、prune 等修改能力。
 
 ## 运行
+
+交互式输入问题：
 
 ```powershell
 python langgraph_qwen_demo.py
 ```
 
-默认会读取当前项目里的 `sample.log`，并使用本机 `qwen3:8b` 分析。
+交互模式会保留当前进程内的短期上下文。退出命令：
 
-## MCP 配置
-
-MCP server 配置不写死在代码里，而是在 `mcp_config.json`：
-
-```json
-{
-  "filesystem": {
-    "command": "cmd",
-    "args": [
-      "/c",
-      "npx",
-      "-y",
-      "@modelcontextprotocol/server-filesystem",
-      "{mcp_root}"
-    ],
-    "transport": "stdio"
-  }
-}
+```text
+exit
+quit
+q
+退出
 ```
 
-`{mcp_root}` 是占位符，运行时会替换成 `--mcp-root` 的值。
-
-## 自定义参数
+直接传问题：
 
 ```powershell
-python langgraph_qwen_demo.py --file .\sample.log --question "分析这个日志" --model qwen3:8b --mcp-root .
+python langgraph_qwen_demo.py --question "当前本机 CPU 和内存是否异常？"
+python langgraph_qwen_demo.py --question "看看 neo4j 容器最近 100 条日志"
+python langgraph_qwen_demo.py --question "分析日志：ERROR database query timeout"
 ```
 
-如果要读取其他目录里的文件，`--mcp-root` 必须包含那个文件所在目录。例如：
+只输入一轮后退出：
 
 ```powershell
-python langgraph_qwen_demo.py --file C:\logs\app.log --mcp-root C:\logs --question "分析这个日志"
+python langgraph_qwen_demo.py --once
 ```
 
-也可以指定另一个 MCP 配置文件：
+## 环境
+
+建议在你的 `Langgraph` conda 环境里运行：
 
 ```powershell
-python langgraph_qwen_demo.py --mcp-config .\mcp_config.json
+conda activate Langgraph
+python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
+
+验证依赖：
+
+```powershell
+python -c "from mcp.server.fastmcp import FastMCP; print('mcp ok')"
+python -c "from langchain_mcp_adapters.client import MultiServerMCPClient; print('adapter ok')"
+docker ps
+```
+
+如果只是普通聊天或直接分析用户粘贴的日志，Docker MCP 不可用时也不会影响这些分支。

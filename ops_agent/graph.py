@@ -8,93 +8,96 @@ from ops_agent.tools import create_tool_groups
 
 async def build_graph(config: dict[str, Any]):
     from langgraph.graph import END, StateGraph
-    from langgraph.prebuilt import ToolNode
 
     llm = create_llm(config["llm"])
     tool_groups = await create_tool_groups(config)
     nodes = OpsAgentNodes(
         llm=llm,
         prompts=config["prompts"],
-        metrics_tools=tool_groups["metrics"],
-        docker_tools=tool_groups["docker"],
+        tools=tool_groups["all"],
         max_tool_steps=int(config["agent"]["max_tool_steps"]),
+        max_replans=int(config["agent"].get("max_replans", 2)),
         runtime_warnings=config.get("runtime_warnings", []),
     )
 
     graph = StateGraph(AgentState)
     graph.add_node("router", nodes.router_agent)
+    graph.add_node("plan_agent", nodes.plan_agent)
+    graph.add_node("replan_agent", nodes.replan_agent)
+    graph.add_node("execute_step", nodes.execute_step)
+    graph.add_node("reflect_agent", nodes.reflect_agent)
     graph.add_node("chat_agent", nodes.chat_agent)
     graph.add_node("log_agent", nodes.log_agent)
-    graph.add_node("metrics_agent", nodes.metrics_agent)
-    graph.add_node("metrics_tools", ToolNode(tool_groups["metrics"]))
-    graph.add_node("docker_agent", nodes.docker_agent)
-    if tool_groups["docker"]:
-        graph.add_node("docker_tools", ToolNode(tool_groups["docker"]))
-    graph.add_node("count_docker_tool_step", nodes.count_tool_step)
-    graph.add_node("reflect_agent", nodes.reflect_agent)
     graph.add_node("final_agent", nodes.final_agent)
 
     graph.set_entry_point("router")
     graph.add_conditional_edges(
         "router",
-        route_from_router,
+        route_after_router,
         {
             "chat": "chat_agent",
             "log": "log_agent",
-            "metrics": "metrics_agent",
-            "docker": "docker_agent",
+            "plan": "plan_agent",
         },
     )
-
-    graph.add_edge("chat_agent", END)
-    graph.add_edge("log_agent", END)
-
     graph.add_conditional_edges(
-        "metrics_agent",
-        route_by_tool_calls,
+        "plan_agent",
+        route_from_plan,
         {
-            "tools": "metrics_tools",
-            "end": END,
+            "execute": "execute_step",
+            "chat": "chat_agent",
+            "log": "log_agent",
+            "final": "final_agent",
         },
     )
-    graph.add_edge("metrics_tools", "final_agent")
-
-    if tool_groups["docker"]:
-        graph.add_conditional_edges(
-            "docker_agent",
-            route_by_tool_calls,
-            {
-                "tools": "docker_tools",
-                "end": END,
-            },
-        )
-        graph.add_edge("docker_tools", "count_docker_tool_step")
-    else:
-        graph.add_edge("docker_agent", END)
-    graph.add_edge("count_docker_tool_step", "reflect_agent")
+    graph.add_edge("execute_step", "reflect_agent")
     graph.add_conditional_edges(
         "reflect_agent",
         route_from_reflect,
         {
-            "continue": "docker_agent",
+            "continue": "execute_step",
+            "replan": "replan_agent",
             "ask_user": "final_agent",
             "final": "final_agent",
         },
     )
+    graph.add_conditional_edges(
+        "replan_agent",
+        route_after_replan,
+        {
+            "execute": "execute_step",
+            "final": "final_agent",
+        },
+    )
+    graph.add_edge("chat_agent", END)
+    graph.add_edge("log_agent", END)
     graph.add_edge("final_agent", END)
     return graph.compile()
 
 
-def route_from_router(state: AgentState) -> str:
-    return state.get("route", "chat")
+def route_after_router(state: AgentState) -> str:
+    route = state.get("route", "chat")
+    if route in {"ops", "metrics", "docker"}:
+        return "plan"
+    return route
 
 
-def route_by_tool_calls(state: AgentState) -> str:
-    last_message = state["messages"][-1]
-    if getattr(last_message, "tool_calls", None):
-        return "tools"
-    return "end"
+def route_from_plan(state: AgentState) -> str:
+    route = state.get("route", "chat")
+    if route in {"chat", "log"}:
+        return route
+    if state.get("plan", {}).get("steps"):
+        return "execute"
+    return "final"
 
 
 def route_from_reflect(state: AgentState) -> str:
     return state.get("next_action", "final")
+
+
+def route_after_replan(state: AgentState) -> str:
+    if state.get("next_action") == "continue" and state.get("current_step_index", 0) < len(
+        state.get("plan", {}).get("steps", [])
+    ):
+        return "execute"
+    return "final"

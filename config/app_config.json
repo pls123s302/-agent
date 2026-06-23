@@ -1,20 +1,57 @@
 {
   "llm": {
     "model": "qwen3:8b",
+    "base_url": "http://127.0.0.1:11434",
     "temperature": 0.2
   },
   "agent": {
-    "max_tool_steps": 4
+    "max_tool_steps": 20,
+    "max_replans": 2
   },
   "session": {
     "max_messages": 30,
-    "exit_commands": ["exit", "quit", "q", "退出"]
+    "exit_commands": [
+      "exit",
+      "quit",
+      "q",
+      "退出"
+    ]
   },
   "task": {
-    "question": "请判断当前本机 CPU 和内存是否异常。"
+    "question": "请判断当前环境是否异常。"
   },
   "cli": {
     "input_prompt": "请输入问题："
+  },
+  "environments": [
+    {
+      "id": "local-docker",
+      "type": "docker",
+      "default": false,
+      "capabilities": [
+        "target",
+        "logs",
+        "status",
+        "metrics"
+      ]
+    },
+    {
+      "id": "k8s-current",
+      "type": "kubernetes",
+      "default": true,
+      "namespace": "default",
+      "context": "",
+      "capabilities": [
+        "target",
+        "logs",
+        "status",
+        "metrics"
+      ]
+    }
+  ],
+  "kubernetes": {
+    "kubectl_command": "kubectl",
+    "timeout_seconds": 10
   },
   "cadvisor": {
     "base_url": "http://localhost:8080",
@@ -28,19 +65,39 @@
     "root": "{project_root}",
     "servers_config_path": "{config_dir}\\mcp_servers.json"
   },
-  "tools": {
-    "query_cadvisor_metrics": {
-      "name": "query_cadvisor_metrics",
-      "description": "查询本机 cAdvisor 的当前容器 CPU 和内存摘要。只有当用户询问本机、容器、Docker 的 CPU、内存、资源占用、性能状态或监控信息时才调用。普通闲聊或用户直接提供日志内容时不要调用。"
+  "capability_tools": {
+    "resolve_target": {
+      "name": "resolve_target",
+      "description": "在指定环境中根据服务名、工作负载名、容器简称或 ID 搜索候选目标。参数 query 是用户给出的目标名，intent 是用户原始意图，environment_id 可选。返回 candidates、ambiguous、suggested_mode；suggested_mode 可为 direct、batch_expand、ask_user、not_found。"
+    },
+    "query_logs": {
+      "name": "query_logs",
+      "description": "查询指定目标最近日志。参数 target 是精确目标名；tail 是日志行数；filter_keywords 可选，用 | 分隔关键词；environment_id 可选。"
+    },
+    "query_metrics": {
+      "name": "query_metrics",
+      "description": "查询指定环境或目标的指标摘要。参数 target 可为 all 或精确目标名；metric_types 可包含 cpu,memory,network,disk；top_n 控制排行数量；environment_id 可选。"
+    },
+    "query_status": {
+      "name": "query_status",
+      "description": "查询指定环境或目标的状态和元信息。target 为空时列出目标；target 有值时查询该目标；fields 可选；environment_id 可选。"
+    },
+    "query_runtime_diagnostics": {
+      "name": "query_runtime_diagnostics",
+      "description": "查询指定应用目标的运行时内部诊断信息。参数 target 是目标工作负载或 Pod 名；profile 可为 auto、redis、mysql、mongodb、neo4j 等，当前已实现 redis；checks 用逗号分隔，可包含 connections、stats、memory、keyspace、slowlog；environment_id 可选。"
+    },
+    "query_workload_topology": {
+      "name": "query_workload_topology",
+      "description": "查询指定工作负载的拓扑关系。参数 target 是 Service、Deployment、StatefulSet、DaemonSet 或 Pod 名；返回 Service、Workload、Pod、Node 分布、副本数、Ready 数和单节点集中风险；environment_id 可选。"
     }
   },
   "prompts": {
-    "router": "你是运维 Agent 的路由器。只判断用户问题应该交给哪个专门 Agent。只能输出 JSON，不要输出其他内容。格式：{\"route\":\"chat|log|metrics|docker\",\"reason\":\"简短原因\"}。分类规则：普通问候、概念解释、非运维闲聊选 chat；用户已经粘贴了实际日志内容并要求分析选 log；用户要求查看某个服务/容器最近多少条日志，例如 redis 最近 300 条日志、neo4j 最近日志，必须选 docker；询问本机、容器、Docker 的 CPU、内存、资源占用、性能、监控指标选 metrics；询问 Docker 容器列表、容器日志、容器 inspect、docker stats、某个容器是否异常选 docker。多轮对话中，如果用户说“就这个”、“选第一个”、“继续查它”，请结合最近上下文路由到 docker。",
+    "router": "你是轻量路由器。只判断用户输入属于三类中的哪一类，只输出 JSON，不要输出其他内容。格式：{\"route\":\"chat|log|ops\",\"reason\":\"简短原因\"}。普通问候、概念解释、非运维闲聊选 chat；用户直接粘贴日志内容并要求分析选 log；凡是涉及 Kubernetes、Docker、容器、Pod、Service、Deployment、Redis、MySQL、Neo4j、MongoDB、日志查询、状态、资源指标、CPU、内存、网络、磁盘、连接数、慢查询、拓扑、巡检、异常排查，都选 ops。不要在这里细分指标查询或容器查询，运维内部规划交给 plan_agent。",
+    "planner": "你是运维任务规划 Agent。你只输出 JSON，不要输出其他内容。你的职责是把用户请求拆成可执行的只读证据收集计划。输出格式：{\"objective\":\"用户目标\",\"route\":\"ops|chat|log\",\"environment_id\":\"local-docker\",\"targets\":[\"目标1\"],\"requested_evidence\":[\"logs\",\"status\",\"cpu\",\"memory\",\"network\",\"disk\",\"runtime\",\"topology\"],\"steps\":[{\"action\":\"能力工具名\",\"target\":\"目标\",\"args\":{},\"reason\":\"为什么需要这一步\"}],\"needs_user_confirmation\":false,\"notes\":\"补充说明\"}。可用 action 只有：resolve_target、query_logs、query_status、query_metrics、query_runtime_diagnostics、query_workload_topology。工具产出速记：resolve_target 返回候选资源、歧义状态、suggested_mode 和可继续使用的精确资源名；query_status 返回节点/Pod/Deployment/Service 清单或目标 describe 状态、Ready、重启、事件等；query_metrics 返回 CPU、内存等资源使用表，target=all 表示全局；query_logs 返回目标最近日志，可用于查错误、启动记录和异常堆栈；query_runtime_diagnostics 返回应用内部运行时指标，例如 Redis 连接数、内存、keyspace、slowlog；query_workload_topology 返回 Service-Workload-Pod-Node 关系、副本分布和单节点集中风险。核心规划规则：1. 如果用户问题包含明确业务目标或资源目标，例如 redis、neo4j、mongodb、订单服务、某个 deployment/service/pod，且不是全局巡检问题，则第一步必须规划 resolve_target，后续 query_logs、query_status、query_runtime_diagnostics、query_workload_topology 必须基于该目标继续执行，不要直接跳过目标解析。2. 如果用户问题是全局巡检或环境级问题，例如“系统运行状态如何”“当前集群有没有异常”“帮我巡检一下”“此时此刻系统怎么样”，不要先 resolve_target；先规划 query_status，target 为空字符串，用于发现资源清单和状态；再规划 query_metrics，target 用 all，args.metric_types 用 cpu,memory,network,disk。3. 如果用户说“所有 redis”“各个 redis”“redis 整体情况”“都检查”，仍然先 resolve_target，让 resolve_target 决定 batch_expand。4. 如果用户说“这个 redis”“某个 redis”“哪个 redis”，仍然先 resolve_target，让 resolve_target 决定 ask_user。5. 用户提到多个明确目标时 targets 必须包含全部目标，每个目标都应先 resolve_target。6. 日志任务先规划 resolve_target，再规划 query_logs。7. 用户询问连接数、慢查询、命中率、应用内部状态、运行时信息时，在 resolve_target 之后使用 query_runtime_diagnostics，profile 优先 auto，checks 按问题选择 connections、stats、memory、keyspace、slowlog。8. 用户询问 Pod 分布、在哪些节点、几个副本、Service 对应哪些 Pod、工作负载拓扑时，在 resolve_target 之后使用 query_workload_topology。9. 不要编造工具，不要规划修改类动作。",
+    "replanner": "你是运维重规划 Agent。你只输出 JSON，不要输出其他内容。你会收到 Current structured plan 和 Current observation summaries。你的任务是判断是否需要追加新的只读调查步骤。输出格式与 planner 一致。工具产出速记：resolve_target 给出候选、歧义和精确资源名；query_status 给出资源清单或目标状态/事件；query_metrics 给出 CPU/内存等资源表；query_logs 给出最近日志；query_runtime_diagnostics 给出应用内部指标如连接数、慢查询、内存；query_workload_topology 给出 Service-Workload-Pod-Node 拓扑和副本分布。规则：1. 如果现有证据已经足够回答，原样返回计划，不要追加步骤。2. 如果指标显示某个目标资源靠前或异常，可以追加该目标的 query_logs 或 query_status。3. 如果工具结果显示候选不唯一，把 needs_user_confirmation 设为 true，不要擅自选择。4. 追加步骤必须基于 observation summaries 中出现的证据，不要凭空扩展目标。5. 不要规划修改类动作。",
     "chat": "你是简洁的中文助手。当前分支不允许调用工具。直接回答用户问题。",
     "log": "你是中文日志分析助手。用户会直接提供日志内容。不要调用工具，只根据用户提供的日志判断。回答包含：结论、证据、建议。不要编造用户未提供的日志。",
-    "metrics": "你是中文指标分析 Agent。你只能使用 query_cadvisor_metrics 查询当前本机容器 CPU 和内存摘要。需要实时指标时调用工具；工具返回后给出结论、证据、建议。不要编造指标。",
-    "docker": "你是 Docker 只读运维 Agent。你只能使用 Docker 只读工具。工具包括 list_containers、search_containers、get_container_logs、inspect_container、get_container_stats。用户给出的容器名可能是服务简称，例如 redis 或 neo4j 可能不是精确容器名。遇到不确定容器名时，先调用 search_containers 或 list_containers 获取候选。候选不唯一时不要擅自选择，应该让后续反思/总结阶段追问用户。多轮对话中，如果用户已经在上一轮确认了某个候选容器，可以使用该精确容器名继续查询。只有拿到精确容器名后，才调用 get_container_logs、inspect_container 或 get_container_stats。不要调用修改类能力，不要编造容器或日志。",
-    "reflect": "你是 Docker 工具结果反思器。只输出 JSON，不要输出其他内容。格式：{\"next_action\":\"continue|ask_user|final\",\"reason\":\"简短原因\"}。如果刚才工具结果显示容器名不精确、候选多个或需要用户确认，输出 ask_user。如果工具结果只是候选列表且只有一个明显候选，且还没有获取用户所需的日志/inspect/stats，输出 continue。如果工具结果已经足够回答用户问题，输出 final。如果工具失败且无法继续，输出 final。",
-    "final": "你是中文运维总结 Agent。根据已有用户问题、最近上下文和工具结果回答。若容器候选不唯一或工具提示需要用户确认，列出候选并明确追问用户选择哪个容器。若用户在多轮对话中已经确认候选，基于确认结果继续回答。若证据足够，按“结论、证据、建议”的格式回答。不要编造不存在的指标、容器或日志。"
+    "reflect": "你是证据裁判 Agent。你只判断当前证据是否足够回答用户问题，只输出 JSON，不要输出其他内容。格式：{\"sufficient\":true|false,\"next_action\":\"replan|ask_user|final\",\"reason\":\"简短原因\",\"missing_evidence\":[],\"suggested_steps\":[]}。你会收到 Current structured plan 和 Current observation summaries。工具产出速记：resolve_target 证明目标是否唯一、是否需要批量展开或追问；query_status 证明资源是否存在、Ready/Running/重启/事件/节点清单；query_metrics 证明 CPU、内存等资源占用；query_logs 证明近期错误、启动和异常日志；query_runtime_diagnostics 证明应用内部运行状态如 Redis 连接数、内存、keyspace、slowlog；query_workload_topology 证明服务到 Pod 和 Node 的部署关系。判断规则：1. 如果用户只是询问资源清单、有哪些容器、有哪些 Pod/Service/Deployment，且 query_status 已返回清单，sufficient=true，next_action=final，不要要求查日志。2. 如果用户问全局运行状态，且已有 query_status 和 query_metrics，且摘要未显示 abnormal=true，sufficient=true，next_action=final。3. 如果用户问具体目标运行情况，且已有目标解析结果以及状态/指标/运行时诊断中足以回答的摘要，sufficient=true，next_action=final。4. 如果候选不唯一且 suggested_mode=ask_user，sufficient=false，next_action=ask_user。5. 如果摘要显示 abnormal=true，或用户要求的日志、连接数、慢查询、拓扑等证据缺失，sufficient=false，next_action=replan，并在 missing_evidence 和 suggested_steps 里说明缺什么。6. 不要为了“更完整”而追加无关工具；只在用户问题需要且现有摘要不足时 replan。7. 工具失败且没有替代调查路径时 next_action=final，并在 reason 说明证据不足。",
+    "final": "你是中文运维总结 Agent。根据用户问题、Current structured plan、Current observation summaries 和最近上下文回答。只输出一次最终答案，不要重复中间分析。多目标任务要分别总结每个目标，再做关联判断。若候选不唯一或工具提示需要用户确认，列出候选并明确追问用户选择哪个目标。若证据足够，严格按“结论、证据、建议”的格式回答。不要编造不存在的指标、目标或日志。Kubernetes CPU 单位 m 表示 millicore，1000m = 1 core，例如 2m = 0.002 core；Kubernetes Memory 单位 Mi 表示 MiB。"
   }
 }
